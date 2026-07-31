@@ -33,7 +33,7 @@ function timeoutForAttempt(base, attempt) {
     return base + (attempt * 4000);
 }
     
-    var NEXUS_SOURCE_ORDER = [
+    var NEXUS_SOURCE_ORDER = ['anilibria', 'anilibria_top', 'kodik', 
         'zetflix',
         'veoveo',
         'cdnvideohub',
@@ -733,13 +733,20 @@ function saveSourcesCache(movie, items) {
     });
 }
 
-function isWorkingSource(j) {
+function isWorkingSource(j) { if (j && (j.balanser === "anilibria" || j.balanser === "anilibria_top" || j.balanser === "kodik")) return true;
     if (!j || !j.url) return false;
 
     return NEXUS_SOURCE_ORDER.indexOf(balanserName(j)) >= 0;
 }
 
 function filterWorkingSources(items) {
+    items = items || [];
+    var hasAni = items.some(function(x) { return x && x.balanser === "anilibria"; });
+    if (!hasAni) {
+        items.unshift({ balanser: "anilibria", name: "AniLibria (Аниме)", url: "https://api.anilibria.tv/v3/title/search" });
+        items.unshift({ balanser: "anilibria_top", name: "AniLibria Top (Топ)", url: "https://api.anilibria.tv/v3/title/updates" });
+        items.unshift({ balanser: "kodik", name: "Kodik (Сериалы/Дорамы)", url: "https://kodik-api.com/search" });
+    }
     if (!items || !items.length) return [];
 
     return items.filter(function (j) {
@@ -811,28 +818,108 @@ function loadContent(url, options, call, fail) {
     try {
         var actMovie = (Lampa.Activity.active() && (Lampa.Activity.active().movie || Lampa.Activity.active().card)) || {};
         var title = (actMovie.title || actMovie.name || actMovie.original_title || "").replace(/[\s:—\-+]+/g, " ").trim();
-        if (title) {
+        var kp_id = actMovie.kinopoisk_id || (actMovie.ids && actMovie.ids.kp);
+        var imdb_id = actMovie.imdb_id;
+
+        // --- Provider 1: AniLibria ---
+        if (url && url.indexOf("anilibria.tv/v3/title/search") >= 0) {
+            if (!title) return fail({ msg: "Название контента не указано" });
             var searchUrl = "https://api.anilibria.tv/v3/title/search?search=" + encodeURIComponent(title) + "&limit=5";
             new Lampa.Reguest().native(searchUrl, function(json) {
                 if (json && json.length) {
                     var item = json[0];
                     var list = item.player && item.player.list || {};
-                    var seasons = {};
+                    var results = [];
                     Object.keys(list).forEach(function(ep) {
                         var hls = list[ep].hls || {};
                         var stream = hls.fhd || hls.hd || hls.sd || "";
                         if (stream) {
                             if (stream.indexOf("http") !== 0) stream = "https://" + (item.player.host || "cache.libria.fun") + stream;
-                            if (!seasons[1]) seasons[1] = [];
-                            seasons[1].push({ title: "Серия " + ep + (list[ep].name ? " — " + list[ep].name : ""), file: stream, episode: parseInt(ep, 10), quality: hls.fhd ? "FHD 1080p" : "HD 720p" });
+                            var qObj = {};
+                            if (hls.fhd) qObj["1080p"] = "https://" + (item.player.host || "cache.libria.fun") + hls.fhd;
+                            if (hls.hd) qObj["720p"] = "https://" + (item.player.host || "cache.libria.fun") + hls.hd;
+                            if (hls.sd) qObj["480p"] = "https://" + (item.player.host || "cache.libria.fun") + hls.sd;
+                            results.push({
+                                title: "Cерия " + ep + (list[ep].name ? " — " + list[ep].name : ""),
+                                season: 1,
+                                episode: parseInt(ep, 10),
+                                url: stream,
+                                quality: qObj
+                            });
                         }
                     });
-                    if (Object.keys(seasons).length) {
-                        return call({ seasons: seasons });
-                    }
+                    if (results.length) return call(results);
                 }
-                // If AniLibria search has no results, fallback to original loadContent
-            }, function() {});
+                return fail({ msg: "Аниме не найдено на AniLibria" });
+            }, function(e) { fail(e); });
+            return;
+        }
+
+        // --- Provider 2: AniLibria Top ---
+        if (url && url.indexOf("anilibria.tv/v3/title/updates") >= 0) {
+            var topUrl = "https://api.anilibria.tv/v3/title/updates?limit=10";
+            new Lampa.Reguest().native(topUrl, function(json) {
+                if (json && json.length) {
+                    var item = json[0];
+                    var list = item.player && item.player.list || {};
+                    var results = [];
+                    Object.keys(list).forEach(function(ep) {
+                        var hls = list[ep].hls || {};
+                        var stream = hls.fhd || hls.hd || hls.sd || "";
+                        if (stream) {
+                            if (stream.indexOf("http") !== 0) stream = "https://" + (item.player.host || "cache.libria.fun") + stream;
+                            results.push({
+                                title: "Top Серия " + ep + (list[ep].name ? " — " + list[ep].name : ""),
+                                season: 1,
+                                episode: parseInt(ep, 10),
+                                url: stream,
+                                quality: { "1080p": stream }
+                            });
+                        }
+                    });
+                    if (results.length) return call(results);
+                }
+                return fail({ msg: "AniLibria Top не ответил" });
+            }, function(e) { fail(e); });
+            return;
+        }
+
+        // --- Provider 3: Kodik ---
+        if (url && url.indexOf("kodik-api.com") >= 0) {
+            var kParams = "token=qWfKXLc1ajId&limit=10&with_episodes=true";
+            if (kp_id) kParams += "&kinopoisk_id=" + encodeURIComponent(kp_id);
+            else if (imdb_id) kParams += "&imdb_id=" + encodeURIComponent(imdb_id);
+            else if (title) kParams += "&title=" + encodeURIComponent(title);
+            else return fail({ msg: "Параметры поиска Kodik не указаны" });
+
+            var kUrl = "https://kodik-api.com/search?" + kParams;
+            new Lampa.Reguest().native(kUrl, function(json) {
+                if (json && json.results && json.results.length) {
+                    var res = json.results[0];
+                    var results = [];
+                    if (res.seasons) {
+                        Object.keys(res.seasons).forEach(function(sNum) {
+                            var sObj = res.seasons[sNum];
+                            if (sObj && sObj.episodes) {
+                                Object.keys(sObj.episodes).forEach(function(eNum) {
+                                    var link = sObj.episodes[eNum];
+                                    var direct = link.indexOf("//") === 0 ? ("https:" + link) : link;
+                                    results.push({
+                                        title: "Сезон " + sNum + ", Серия " + eNum,
+                                        season: parseInt(sNum, 10),
+                                        episode: parseInt(eNum, 10),
+                                        url: direct,
+                                        quality: { "720p": direct }
+                                    });
+                                });
+                            }
+                        });
+                    }
+                    if (results.length) return call(results);
+                }
+                return fail({ msg: "Контент не найден на Kodik" });
+            }, function(e) { fail(e); });
+            return;
         }
     } catch(err) {}
     options = options || {};
