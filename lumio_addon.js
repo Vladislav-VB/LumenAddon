@@ -817,46 +817,62 @@ var nexusContentPrefetch = {};
 function loadContent(url, options, call, fail) {
     try {
         var actMovie = (Lampa.Activity.active() && (Lampa.Activity.active().movie || Lampa.Activity.active().card)) || {};
-        var title = (actMovie.title || actMovie.name || actMovie.original_title || actMovie.original_name || "").replace(/[\s:—\-+]+/g, " ").trim();
+        var ruTitle = (actMovie.title || actMovie.name || "").replace(/[\s:—\-+]+/g, " ").trim();
+        var enTitle = (actMovie.original_title || actMovie.original_name || "").replace(/[\s:—\-+]+/g, " ").trim();
         var kp_id = actMovie.kinopoisk_id || (actMovie.ids && actMovie.ids.kp);
         var imdb_id = actMovie.imdb_id;
         var shikimori_id = actMovie.shikimori_id || (actMovie.ids && actMovie.ids.shikimori);
 
-        // --- Provider 1: AniLibria (Title + Shikimori ID) ---
-        if (url && url.indexOf("anilibria.tv/v3/title/search") >= 0) {
-            var aniApi = "";
-            if (shikimori_id) {
-                aniApi = "https://api.anilibria.tv/v3/title?shikimori_id=" + encodeURIComponent(shikimori_id);
-            } else if (title) {
-                aniApi = "https://api.anilibria.tv/v3/title/search?search=" + encodeURIComponent(title) + "&limit=5";
-            } else return fail({ msg: "Название контента не указано" });
+        // Функция парсинга результата AniLibria
+        function parseAniLibriaJson(json) {
+            var item = Array.isArray(json) ? json[0] : json;
+            if (item && item.player && item.player.list) {
+                var list = item.player.list;
+                var results = [];
+                Object.keys(list).forEach(function(ep) {
+                    var hls = list[ep].hls || {};
+                    var stream = hls.fhd || hls.hd || hls.sd || "";
+                    if (stream) {
+                        if (stream.indexOf("http") !== 0) stream = "https://" + (item.player.host || "cache.libria.fun") + stream;
+                        var qObj = {};
+                        if (hls.fhd) qObj["1080p"] = "https://" + (item.player.host || "cache.libria.fun") + hls.fhd;
+                        if (hls.hd) qObj["720p"] = "https://" + (item.player.host || "cache.libria.fun") + hls.hd;
+                        if (hls.sd) qObj["480p"] = "https://" + (item.player.host || "cache.libria.fun") + hls.sd;
+                        results.push({
+                            title: "Серия " + ep + (list[ep].name ? " — " + list[ep].name : ""),
+                            season: 1,
+                            episode: parseInt(ep, 10),
+                            url: stream,
+                            quality: qObj
+                        });
+                    }
+                });
+                return results;
+            }
+            return [];
+        }
 
-            new Lampa.Reguest().native(aniApi, function(json) {
-                var item = Array.isArray(json) ? json[0] : json;
-                if (item && item.player && item.player.list) {
-                    var list = item.player.list;
-                    var results = [];
-                    Object.keys(list).forEach(function(ep) {
-                        var hls = list[ep].hls || {};
-                        var stream = hls.fhd || hls.hd || hls.sd || "";
-                        if (stream) {
-                            if (stream.indexOf("http") !== 0) stream = "https://" + (item.player.host || "cache.libria.fun") + stream;
-                            var qObj = {};
-                            if (hls.fhd) qObj["1080p"] = "https://" + (item.player.host || "cache.libria.fun") + hls.fhd;
-                            if (hls.hd) qObj["720p"] = "https://" + (item.player.host || "cache.libria.fun") + hls.hd;
-                            if (hls.sd) qObj["480p"] = "https://" + (item.player.host || "cache.libria.fun") + hls.sd;
-                            results.push({
-                                title: "Серия " + ep + (list[ep].name ? " — " + list[ep].name : ""),
-                                season: 1,
-                                episode: parseInt(ep, 10),
-                                url: stream,
-                                quality: qObj
-                            });
-                        }
-                    });
-                    if (results.length) return call(results);
+        // --- Provider 1: AniLibria ---
+        if (url && url.indexOf("anilibria.tv/v3/title/search") >= 0) {
+            var searchQuery = ruTitle || enTitle;
+            if (!searchQuery) return fail({ msg: "Название аниме не указано" });
+
+            var aniApiRu = "https://api.anilibria.tv/v3/title/search?search=" + encodeURIComponent(ruTitle) + "&limit=5";
+            new Lampa.Reguest().native(aniApiRu, function(jsonRu) {
+                var resRu = parseAniLibriaJson(jsonRu);
+                if (resRu.length) return call(resRu);
+
+                // Пробуем по английскому названию
+                if (enTitle && enTitle !== ruTitle) {
+                    var aniApiEn = "https://api.anilibria.tv/v3/title/search?search=" + encodeURIComponent(enTitle) + "&limit=5";
+                    new Lampa.Reguest().native(aniApiEn, function(jsonEn) {
+                        var resEn = parseAniLibriaJson(jsonEn);
+                        if (resEn.length) return call(resEn);
+                        return fail({ msg: "Аниме не найдено на AniLibria" });
+                    }, function() { fail({ msg: "Ошибка поиска AniLibria" }); });
+                } else {
+                    return fail({ msg: "Аниме не найдено на AniLibria" });
                 }
-                return fail({ msg: "Аниме не найдено на AniLibria" });
             }, function(e) { fail(e); });
             return;
         }
@@ -865,26 +881,8 @@ function loadContent(url, options, call, fail) {
         if (url && url.indexOf("anilibria.tv/v3/title/updates") >= 0) {
             var topUrl = "https://api.anilibria.tv/v3/title/updates?limit=10";
             new Lampa.Reguest().native(topUrl, function(json) {
-                if (json && json.length) {
-                    var item = json[0];
-                    var list = item.player && item.player.list || {};
-                    var results = [];
-                    Object.keys(list).forEach(function(ep) {
-                        var hls = list[ep].hls || {};
-                        var stream = hls.fhd || hls.hd || hls.sd || "";
-                        if (stream) {
-                            if (stream.indexOf("http") !== 0) stream = "https://" + (item.player.host || "cache.libria.fun") + stream;
-                            results.push({
-                                title: "Top Серия " + ep + (list[ep].name ? " — " + list[ep].name : ""),
-                                season: 1,
-                                episode: parseInt(ep, 10),
-                                url: stream,
-                                quality: { "1080p": stream }
-                            });
-                        }
-                    });
-                    if (results.length) return call(results);
-                }
+                var res = parseAniLibriaJson(json);
+                if (res.length) return call(res);
                 return fail({ msg: "AniLibria Top не ответил" });
             }, function(e) { fail(e); });
             return;
@@ -895,7 +893,7 @@ function loadContent(url, options, call, fail) {
             var kParams = "token=qWfKXLc1ajId&limit=10&with_episodes=true";
             if (kp_id) kParams += "&kinopoisk_id=" + encodeURIComponent(kp_id);
             else if (imdb_id) kParams += "&imdb_id=" + encodeURIComponent(imdb_id);
-            else if (title) kParams += "&title=" + encodeURIComponent(title);
+            else if (ruTitle) kParams += "&title=" + encodeURIComponent(ruTitle);
             else return fail({ msg: "Параметры поиска Kodik не указаны" });
 
             var kUrl = "https://kodik-api.com/search?" + kParams;
