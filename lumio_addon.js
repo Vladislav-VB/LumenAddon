@@ -33,7 +33,7 @@ function timeoutForAttempt(base, attempt) {
     return base + (attempt * 4000);
 }
     
-    var NEXUS_SOURCE_ORDER = ['anilibria', 
+    var NEXUS_SOURCE_ORDER = [
         'zetflix',
         'veoveo',
         'cdnvideohub',
@@ -733,18 +733,13 @@ function saveSourcesCache(movie, items) {
     });
 }
 
-function isWorkingSource(j) { if (j && j.balanser === "anilibria") return true;
+function isWorkingSource(j) {
     if (!j || !j.url) return false;
 
     return NEXUS_SOURCE_ORDER.indexOf(balanserName(j)) >= 0;
 }
 
 function filterWorkingSources(items) {
-    items = items || [];
-    var hasAni = items.some(function(x) { return x && x.balanser === "anilibria"; });
-    if (!hasAni) {
-        items.unshift({ balanser: "anilibria", name: "AniLibria", url: "https://api.anilibria.tv/v3/title/search" });
-    }
     if (!items || !items.length) return [];
 
     return items.filter(function (j) {
@@ -813,11 +808,10 @@ var nexusPrefetch = {};
 var nexusContentPrefetch = {};
 
 function loadContent(url, options, call, fail) {
-    if (url && url.indexOf("api.anilibria.tv") >= 0) {
-        try {
-            var actMovie = (Lampa.Activity.active() && Lampa.Activity.active().movie) || {};
-            var title = (actMovie.title || actMovie.name || actMovie.original_title || "").replace(/[\s:—\-+]+/g, " ").trim();
-            if (!title) { fail && fail({}); return; }
+    try {
+        var actMovie = (Lampa.Activity.active() && (Lampa.Activity.active().movie || Lampa.Activity.active().card)) || {};
+        var title = (actMovie.title || actMovie.name || actMovie.original_title || "").replace(/[\s:—\-+]+/g, " ").trim();
+        if (title) {
             var searchUrl = "https://api.anilibria.tv/v3/title/search?search=" + encodeURIComponent(title) + "&limit=5";
             new Lampa.Reguest().native(searchUrl, function(json) {
                 if (json && json.length) {
@@ -833,13 +827,14 @@ function loadContent(url, options, call, fail) {
                             seasons[1].push({ title: "Серия " + ep + (list[ep].name ? " — " + list[ep].name : ""), file: stream, episode: parseInt(ep, 10), quality: hls.fhd ? "FHD 1080p" : "HD 720p" });
                         }
                     });
-                    return call({ seasons: seasons });
+                    if (Object.keys(seasons).length) {
+                        return call({ seasons: seasons });
+                    }
                 }
-                fail && fail({ msg: "Аниме не найдено на AniLibria" });
-            }, function(e) { fail && fail(e); });
-        } catch(err) { fail && fail(err); }
-        return;
-    }
+                // If AniLibria search has no results, fallback to original loadContent
+            }, function() {});
+        }
+    } catch(err) {}
     options = options || {};
 
     if (!url) {
