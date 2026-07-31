@@ -33,7 +33,7 @@ function timeoutForAttempt(base, attempt) {
     return base + (attempt * 4000);
 }
     
-    var NEXUS_SOURCE_ORDER = [
+    var NEXUS_SOURCE_ORDER = ['anilibria', 
         'zetflix',
         'veoveo',
         'cdnvideohub',
@@ -733,7 +733,7 @@ function saveSourcesCache(movie, items) {
     });
 }
 
-function isWorkingSource(j) {
+function isWorkingSource(j) { if (j && j.balanser === "anilibria") return true;
     if (!j || !j.url) return false;
 
     return NEXUS_SOURCE_ORDER.indexOf(balanserName(j)) >= 0;
@@ -895,6 +895,36 @@ function loadSources(movie, call, fail, fast, idsReady) {
     };
 
     var url = requestParams(NEXUS_HOST + '/lite/events?life=false', movie);
+
+    // AniLibria Integration
+    try {
+        var aniTitle = (movie.title || movie.name || movie.original_title || "").replace(/[\s:—\-+]+/g, " ").trim();
+        if (aniTitle) {
+            var aniApi = "https://api.anilibria.tv/v3/title/search?search=" + encodeURIComponent(aniTitle) + "&limit=3";
+            new Lampa.Reguest().native(aniApi, function(json) {
+                if (json && json.length) {
+                    var item = json[0];
+                    var list = item.player && item.player.list || {};
+                    var seasons = {};
+                    Object.keys(list).forEach(function(ep) {
+                        var hls = list[ep].hls || {};
+                        var stream = hls.fhd || hls.hd || hls.sd || "";
+                        if (stream) {
+                            if (stream.indexOf("http") !== 0) stream = "https://" + (item.player.host || "cache.libria.fun") + stream;
+                            if (!seasons[1]) seasons[1] = [];
+                            seasons[1].push({ title: "Серия " + ep + (list[ep].name ? " — " + list[ep].name : ""), file: stream, episode: parseInt(ep, 10) });
+                        }
+                    });
+                    if (Object.keys(seasons).length) {
+                        var aniSource = { balanser: "anilibria", name: "AniLibria", url: aniApi, seasons: seasons };
+                        var cached = readSourcesCache(movie) || [];
+                        cached.unshift(aniSource);
+                        saveSourcesCache(movie, cached);
+                    }
+                }
+            }, function(){});
+        }
+    } catch(e){}
 
     function finishSuccess(items) {
         var waiters = nexusPrefetch[key];
