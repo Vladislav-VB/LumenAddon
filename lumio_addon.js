@@ -733,36 +733,8 @@ function saveSourcesCache(movie, items) {
     });
 }
 
-
-    // --- Lumio Addon Integrations (AniLibria + Kodik) ---
-    function fetchAniLibria(movie, callback) {
-        try {
-            var title = (movie.title || movie.name || movie.original_title || '').replace(/[\s:—\-+]+/g, ' ').trim();
-            if (!title) return callback(null);
-            var url = 'https://api.anilibria.tv/v3/title/search?search=' + encodeURIComponent(title) + '&limit=5';
-            new Lampa.Reguest().native(url, function(json) {
-                if (json && json.length) {
-                    var item = json[0];
-                    var list = item.player && item.player.list || {};
-                    var eps = [];
-                    Object.keys(list).forEach(function(ep) {
-                        var hls = list[ep].hls || {};
-                        var stream = hls.fhd || hls.hd || hls.sd || '';
-                        if (stream) {
-                            if (stream.indexOf('http') !== 0) stream = 'https://' + (item.player.host || 'cache.libria.fun') + stream;
-                            eps.push({ title: 'Серия ' + ep + (list[ep].name ? ' — ' + list[ep].name : ''), file: stream, episode: parseInt(ep, 10) });
-                        }
-                    });
-                    if (eps.length) {
-                        return callback({ balanser: 'anilibria', name: 'AniLibria', url: url, custom_episodes: eps });
-                    }
-                }
-                callback(null);
-            }, function() { callback(null); });
-        } catch(e) { callback(null); }
-    }
-
-function isWorkingSource(j) { if (j && (j.balanser === "anilibria" || j.balanser === "anilibria_top" || j.balanser === "kodik")) return true;
+function isWorkingSource(j) {
+    if (j && (j.balanser === "anilibria" || j.balanser === "anilibria_top" || j.balanser === "kodik")) return true;
     if (!j || !j.url) return false;
 
     return NEXUS_SOURCE_ORDER.indexOf(balanserName(j)) >= 0;
@@ -3544,7 +3516,53 @@ function startNexusButtonWatcher() {
     }
 }
 
+if (window.Lampa && Lampa.Plugins && Lampa.Plugins.register) {
+    try {
+        Lampa.Plugins.register({
+            type: "online",
+            name: "Lumio",
+            description: "Lumio (AniLibria + Kodik)",
+            icon: NEXUS_MENU_ICON,
+            onSelect: function (movie) {
+                openNexus(movie);
+            }
+        });
+    } catch(e){}
+}
+
+function insertNexusButtonDirect(e) {
+    try {
+        var scope = (e && e.object && e.object.activity && e.object.activity.render) ? e.object.activity.render() : ((e && e.render) ? e.render : (window.$ ? window.$(".full").last() : null));
+        if (!scope || !scope.length) return false;
+        if (scope.find(".nexus--button").length) return true;
+        var btn = $(nexusCardButtonHtml);
+        btn.on("hover:enter", function () {
+            var activeMovie = (e && e.data && e.data.movie) ? e.data.movie : getActiveMovie();
+            if (activeMovie) openNexus(activeMovie);
+        });
+        var target = scope.find(".view--torrent").first();
+        if (!target.length) target = scope.find(".view--online:not(.nexus--button)").first();
+        if (!target.length) target = scope.find(".full-start__button").last();
+        if (!target.length) target = scope.find(".full-start__buttons");
+        if (target.length) {
+            if (target.hasClass("full-start__buttons")) target.append(btn);
+            else target.after(btn);
+            return true;
+        }
+    } catch (err) {}
+    return false;
+}
+
 if (Lampa.Listener && Lampa.Listener.follow) {
+    Lampa.Listener.follow("full", function (e) {
+        registerNexusManifest();
+        insertNexusButtonDirect(e);
+        setTimeout(function() { insertNexusButtonDirect(e); }, 100);
+        setTimeout(startNexusButtonWatcher, 0);
+        setTimeout(startNexusButtonWatcher, 300);
+        setTimeout(startNexusButtonWatcher, 1000);
+    });
+
     Lampa.Listener.follow('app', function (e) {
         if (e.type === 'ready') {
             setTimeout(startNexusButtonWatcher, 0);
