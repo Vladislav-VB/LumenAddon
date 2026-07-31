@@ -740,6 +740,11 @@ function isWorkingSource(j) { if (j && j.balanser === "anilibria") return true;
 }
 
 function filterWorkingSources(items) {
+    items = items || [];
+    var hasAni = items.some(function(x) { return x && x.balanser === "anilibria"; });
+    if (!hasAni) {
+        items.unshift({ balanser: "anilibria", name: "AniLibria", url: "https://api.anilibria.tv/v3/title/search" });
+    }
     if (!items || !items.length) return [];
 
     return items.filter(function (j) {
@@ -808,6 +813,33 @@ var nexusPrefetch = {};
 var nexusContentPrefetch = {};
 
 function loadContent(url, options, call, fail) {
+    if (url && url.indexOf("api.anilibria.tv") >= 0) {
+        try {
+            var actMovie = (Lampa.Activity.active() && Lampa.Activity.active().movie) || {};
+            var title = (actMovie.title || actMovie.name || actMovie.original_title || "").replace(/[\s:—\-+]+/g, " ").trim();
+            if (!title) { fail && fail({}); return; }
+            var searchUrl = "https://api.anilibria.tv/v3/title/search?search=" + encodeURIComponent(title) + "&limit=5";
+            new Lampa.Reguest().native(searchUrl, function(json) {
+                if (json && json.length) {
+                    var item = json[0];
+                    var list = item.player && item.player.list || {};
+                    var seasons = {};
+                    Object.keys(list).forEach(function(ep) {
+                        var hls = list[ep].hls || {};
+                        var stream = hls.fhd || hls.hd || hls.sd || "";
+                        if (stream) {
+                            if (stream.indexOf("http") !== 0) stream = "https://" + (item.player.host || "cache.libria.fun") + stream;
+                            if (!seasons[1]) seasons[1] = [];
+                            seasons[1].push({ title: "Серия " + ep + (list[ep].name ? " — " + list[ep].name : ""), file: stream, episode: parseInt(ep, 10), quality: hls.fhd ? "FHD 1080p" : "HD 720p" });
+                        }
+                    });
+                    return call({ seasons: seasons });
+                }
+                fail && fail({ msg: "Аниме не найдено на AniLibria" });
+            }, function(e) { fail && fail(e); });
+        } catch(err) { fail && fail(err); }
+        return;
+    }
     options = options || {};
 
     if (!url) {
@@ -895,36 +927,6 @@ function loadSources(movie, call, fail, fast, idsReady) {
     };
 
     var url = requestParams(NEXUS_HOST + '/lite/events?life=false', movie);
-
-    // AniLibria Integration
-    try {
-        var aniTitle = (movie.title || movie.name || movie.original_title || "").replace(/[\s:—\-+]+/g, " ").trim();
-        if (aniTitle) {
-            var aniApi = "https://api.anilibria.tv/v3/title/search?search=" + encodeURIComponent(aniTitle) + "&limit=3";
-            new Lampa.Reguest().native(aniApi, function(json) {
-                if (json && json.length) {
-                    var item = json[0];
-                    var list = item.player && item.player.list || {};
-                    var seasons = {};
-                    Object.keys(list).forEach(function(ep) {
-                        var hls = list[ep].hls || {};
-                        var stream = hls.fhd || hls.hd || hls.sd || "";
-                        if (stream) {
-                            if (stream.indexOf("http") !== 0) stream = "https://" + (item.player.host || "cache.libria.fun") + stream;
-                            if (!seasons[1]) seasons[1] = [];
-                            seasons[1].push({ title: "Серия " + ep + (list[ep].name ? " — " + list[ep].name : ""), file: stream, episode: parseInt(ep, 10) });
-                        }
-                    });
-                    if (Object.keys(seasons).length) {
-                        var aniSource = { balanser: "anilibria", name: "AniLibria", url: aniApi, seasons: seasons };
-                        var cached = readSourcesCache(movie) || [];
-                        cached.unshift(aniSource);
-                        saveSourcesCache(movie, cached);
-                    }
-                }
-            }, function(){});
-        }
-    } catch(e){}
 
     function finishSuccess(items) {
         var waiters = nexusPrefetch[key];
