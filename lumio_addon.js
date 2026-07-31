@@ -33,7 +33,7 @@ function timeoutForAttempt(base, attempt) {
     return base + (attempt * 4000);
 }
     
-    var NEXUS_SOURCE_ORDER = ['anilibria', 'anilibria_top', 'kodik', 
+    var NEXUS_SOURCE_ORDER = ['anilibria', 
         'zetflix',
         'veoveo',
         'cdnvideohub',
@@ -733,8 +733,7 @@ function saveSourcesCache(movie, items) {
     });
 }
 
-function isWorkingSource(j) {
-    if (j && (j.balanser === "anilibria" || j.balanser === "anilibria_top" || j.balanser === "kodik")) return true;
+function isWorkingSource(j) { if (j && j.balanser === "anilibria") return true;
     if (!j || !j.url) return false;
 
     return NEXUS_SOURCE_ORDER.indexOf(balanserName(j)) >= 0;
@@ -896,6 +895,36 @@ function loadSources(movie, call, fail, fast, idsReady) {
     };
 
     var url = requestParams(NEXUS_HOST + '/lite/events?life=false', movie);
+
+    // AniLibria Integration
+    try {
+        var aniTitle = (movie.title || movie.name || movie.original_title || "").replace(/[\s:—\-+]+/g, " ").trim();
+        if (aniTitle) {
+            var aniApi = "https://api.anilibria.tv/v3/title/search?search=" + encodeURIComponent(aniTitle) + "&limit=3";
+            new Lampa.Reguest().native(aniApi, function(json) {
+                if (json && json.length) {
+                    var item = json[0];
+                    var list = item.player && item.player.list || {};
+                    var seasons = {};
+                    Object.keys(list).forEach(function(ep) {
+                        var hls = list[ep].hls || {};
+                        var stream = hls.fhd || hls.hd || hls.sd || "";
+                        if (stream) {
+                            if (stream.indexOf("http") !== 0) stream = "https://" + (item.player.host || "cache.libria.fun") + stream;
+                            if (!seasons[1]) seasons[1] = [];
+                            seasons[1].push({ title: "Серия " + ep + (list[ep].name ? " — " + list[ep].name : ""), file: stream, episode: parseInt(ep, 10) });
+                        }
+                    });
+                    if (Object.keys(seasons).length) {
+                        var aniSource = { balanser: "anilibria", name: "AniLibria", url: aniApi, seasons: seasons };
+                        var cached = readSourcesCache(movie) || [];
+                        cached.unshift(aniSource);
+                        saveSourcesCache(movie, cached);
+                    }
+                }
+            }, function(){});
+        }
+    } catch(e){}
 
     function finishSuccess(items) {
         var waiters = nexusPrefetch[key];
@@ -3516,53 +3545,7 @@ function startNexusButtonWatcher() {
     }
 }
 
-if (window.Lampa && Lampa.Plugins && Lampa.Plugins.register) {
-    try {
-        Lampa.Plugins.register({
-            type: "online",
-            name: "Lumio",
-            description: "Lumio (AniLibria + Kodik)",
-            icon: NEXUS_MENU_ICON,
-            onSelect: function (movie) {
-                openNexus(movie);
-            }
-        });
-    } catch(e){}
-}
-
-function insertNexusButtonDirect(e) {
-    try {
-        var scope = (e && e.object && e.object.activity && e.object.activity.render) ? e.object.activity.render() : ((e && e.render) ? e.render : (window.$ ? window.$(".full").last() : null));
-        if (!scope || !scope.length) return false;
-        if (scope.find(".nexus--button").length) return true;
-        var btn = $(nexusCardButtonHtml);
-        btn.on("hover:enter", function () {
-            var activeMovie = (e && e.data && e.data.movie) ? e.data.movie : getActiveMovie();
-            if (activeMovie) openNexus(activeMovie);
-        });
-        var target = scope.find(".view--torrent").first();
-        if (!target.length) target = scope.find(".view--online:not(.nexus--button)").first();
-        if (!target.length) target = scope.find(".full-start__button").last();
-        if (!target.length) target = scope.find(".full-start__buttons");
-        if (target.length) {
-            if (target.hasClass("full-start__buttons")) target.append(btn);
-            else target.after(btn);
-            return true;
-        }
-    } catch (err) {}
-    return false;
-}
-
 if (Lampa.Listener && Lampa.Listener.follow) {
-    Lampa.Listener.follow("full", function (e) {
-        registerNexusManifest();
-        insertNexusButtonDirect(e);
-        setTimeout(function() { insertNexusButtonDirect(e); }, 100);
-        setTimeout(startNexusButtonWatcher, 0);
-        setTimeout(startNexusButtonWatcher, 300);
-        setTimeout(startNexusButtonWatcher, 1000);
-    });
-
     Lampa.Listener.follow('app', function (e) {
         if (e.type === 'ready') {
             setTimeout(startNexusButtonWatcher, 0);
